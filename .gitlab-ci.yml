@@ -1,0 +1,75 @@
+# Use the Docker 19.03.5 image and Docker-in-Docker service
+image: docker:19.03.5
+services:
+ - docker:19.03.5-dind
+
+
+# Define the stages of the pipeline
+stages:
+ - Build
+ - Push
+
+
+# Specify commands to run before executing the jobs in the pipeline
+before_script:
+ # Install Python 3 and the awscli package
+ - apk add python3
+ - pip3 install awscli==1.18.8
+ # Load the Docker image from a file into the Docker daemon
+ - docker load --input data/image.tar
+ # Log in to the AWS Elastic Container Registry (ECR) to authenticate Docker push/pull requests
+ - $(aws ecr get-login --no-include-email --region us-east-1)
+
+
+# Define the Build stage
+Build:
+ stage: Build
+ before_script: []
+ script:
+   # Create a directory for storing the Docker image
+   - mkdir data/
+   # Build the Docker image with the tag "proxy"
+   - docker build --compress -t proxy .
+   # Save the Docker image as a TAR archive in the "data" directory
+   - docker save --output data/image.tar proxy
+ artifacts:
+   # Define an artifact called "image" that includes the contents of the "data" directory
+   name: image
+   paths:
+     - data/
+
+
+# Define the Push stage for pushing the Docker image to an ECR repository for Dev
+Push Dev:
+ # Define a stage called "Push" for pushing the Docker image to an ECR repository
+ stage: Push
+ # Define the commands to be run in the stage
+ script:
+   # Tag the Docker image with a new name that includes the ECR repository and the tag "dev"
+   - docker tag proxy:latest $ECR_REPO:dev
+   # Push the tagged Docker image to the ECR repository
+   - docker push $ECR_REPO:dev
+ # Define rules for when the stage should be run
+ rules:
+   # Only run the stage if the current branch is "main"
+   - if: "$CI_COMMIT_BRANCH == 'main'"
+
+
+# Define the Push stage for pushing the Docker image to an ECR repository for Release
+Push Release:
+ # Define a stage called "Push" for pushing the Docker image to an ECR repository
+ stage: Push
+ # Define the commands to be run in the stage
+ script:
+   # Set an environment variable with the ECR repository name and a modified tag
+   - export TAGGED_ECR_REPO=$ECR_REPO:$(echo $CI_COMMIT_TAG | sed 's/-release//')
+   # Tag the Docker image with the modified tag and push it to the ECR repository
+   - docker tag proxy:latest $TAGGED_ECR_REPO
+   - docker push $TAGGED_ECR_REPO
+   # Tag the Docker image with the "latest" tag and push it to the ECR repository
+   - docker tag $TAGGED_ECR_REPO $ECR_REPO:latest
+   - docker push $ECR_REPO:latest
+ # Define rules for when the stage should be run
+ rules:
+   # Only run the stage if the current tag matches the regex pattern "*-release"
+   - if: "$CI_COMMIT_TAG =~ /^*-release$/"
